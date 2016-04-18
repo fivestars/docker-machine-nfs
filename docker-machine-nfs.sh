@@ -29,18 +29,18 @@ set -o errexit
 # @info:    Prints the ascii logo
 asciiLogo ()
 {
-  echo
-  echo
-  echo '                       ##         .'
-  echo '                 ## ## ##        ==               _   _ _____ ____'
-  echo '              ## ## ## ## ##    ===              | \ | |  ___/ ___|'
-  echo '          /"""""""""""""""""\___/ ===            |  \| | |_  \___ \'
-  echo '     ~~~ {~~ ~~~~ ~~~ ~~~~ ~~~ ~ /  ===- ~~~     | |\  |  _|  ___) |'
-  echo '          \______ o           __/                |_| \_|_|   |____/'
-  echo '            \    \         __/'
-  echo '             \____\_______/'
-  echo
-  echo
+  printf "%s\n" ''
+  printf "%s\n" ''
+  printf "%s\n" '                      ##         .'
+  printf "%s\n" '                ## ## ##        ==               _   _ _____ ____'
+  printf "%s\n" '             ## ## ## ## ##    ===              | \ | |  ___/ ___|'
+  printf "%s\n" '         /"""""""""""""""""\___/ ===            |  \| | |_  \___ \'
+  printf "%s\n" '    ~~~ {~~ ~~~~ ~~~ ~~~~ ~~~ ~ /  ===- ~~~     | |\  |  _|  ___) |'
+  printf "%s\n" '         \______ o           __/                |_| \_|_|   |____/'
+  printf "%s\n" '           \    \         __/'
+  printf "%s\n" '            \____\_______/'
+  printf "%s\n" ''
+  printf "%s\n" ''
 }
 
 # @info:    Prints the usage
@@ -55,9 +55,10 @@ Usage: $0 <machine-name> [options]
 Options:
 
   -f, --force               Force reconfiguration of nfs
-  -n, --nfs-config          NFS configuration to use in /etc/exports. (default to '-alldirs -mapall=\$(id -u):\$(id -g)')
-  -s, --shared-folder,...   Folder to share (default to /Users)
-  -m, --mount-opts          NFS mount options (default to 'noacl,async')
+  -n, --nfs-config          NFS configuration to use in /etc/exports (default to '-alldirs -mapall=\$(id -u):\$(id -g)')
+  -s, --shared-folder,...   Folder to share. Use local:mount form to specify a different name for the docker machine mount (default to /Users)
+  -m, --mount-opts          NFS mount options (default to 'noacl,async[,nolock on Cygwin]')
+  -c, --cygwin-dir          Location of x86 Cygwin root directory [Cygwin only] (default to /cygdrive/c/cygwin)
 
 Examples:
 
@@ -68,6 +69,10 @@ Examples:
   $ docker-machine-nfs test --shared-folder=/Users --shared-folder=/var/www
 
     > Configures the /Users and /var/www folder with NFS
+
+  $ docker-machine-nfs test --shared-folder=/Users:/home
+
+    > Configures the /Users folder with NFS as /home in the docker machine
 
   $ docker-machine-nfs test --shared-folder=/var/www --nfs-config="-alldirs -maproot=0"
 
@@ -85,21 +90,21 @@ EOF
 # @args:    error-message
 echoError ()
 {
-  echo "\033[0;31mFAIL\n\n$1 \033[0m"
+  printf "\033[0;31mFAIL\n\n%s \033[0m\n" "$1"
 }
 
 # @info:    Prints warning messages
 # @args:    warning-message
 echoWarn ()
 {
-  echo "\033[0;33m$1 \033[0m"
+  printf "\033[0;33m%s \033[0m\n" "$1"
 }
 
 # @info:    Prints success messages
 # @args:    success-message
 echoSuccess ()
 {
-  echo "\033[0;32m$1 \033[0m"
+  printf "\033[0;32m%s \033[0m\n" "$1"
 }
 
 # @info:    Prints check messages
@@ -113,7 +118,7 @@ echoInfo ()
 # @args:    property-message
 echoProperties ()
 {
-  echo "\t\033[0;35m- $1 \033[0m"
+  printf "\t\033[0;35m- %s \033[0m\n" "$1"
 }
 
 # @info:    Checks if a given property is set
@@ -123,14 +128,31 @@ isPropertyNotSet()
   if [ -z ${1+x} ]; then return 0; else return 1; fi
 }
 
+case $(uname) in
+  CYGWIN*)
+    sudo()
+    {
+      $@;
+    }
+    ;;
+  *) ;;
+esac
+
 # @info:    Sets the default properties
 setPropDefaults()
 {
   prop_machine_name=
   prop_shared_folders=()
-  prop_nfs_config="-alldirs -mapall="$(id -u):$(id -g)
-  prop_mount_options="noacl,async"
+  case $(uname) in
+    CYGWIN*) prop_nfs_config="(rw,map_static=/etc/nfs/server.map)";;
+    *) prop_nfs_config="-alldirs -mapall="$(id -u):$(id -g);;
+  esac
+  case $(uname) in
+    CYGWIN*) prop_mount_options="noacl,async,nolock";;
+    *) prop_mount_options="noacl,async";;
+  esac
   prop_force_configuration_nfs=false
+  prop_cygwin_dir="/cygdrive/c/cygwin"
 }
 
 # @info:    Parses and validates the CLI arguments
@@ -145,15 +167,16 @@ parseCli()
   do
     case $i in
       -s=*|--shared-folder=*)
-      local shared_folder="${i#*=}"
-      shift
+        local shared_folder="${i#*=}"
+        shared_folder=${shared_folder%:*}:${shared_folder#*:}
+        shift
 
-      if [ ! -d "$shared_folder" ]; then
-        echoError "Given shared folder '$shared_folder' does not exist!"
-        exit 1
-      fi
+        if [ ! -d "${shared_folder%:*}" ]; then
+          echoError "Given shared folder '${shared_folder%:*}' does not exist!"
+          exit 1
+        fi
 
-      prop_shared_folders+=($shared_folder)
+        prop_shared_folders+=($shared_folder)
       ;;
 
       -n=*|--nfs-config=*)
@@ -164,28 +187,31 @@ parseCli()
         prop_mount_options="${i#*=}"
       ;;
 
-
       -f|--force)
-      prop_force_configuration_nfs=true
-      shift
+        prop_force_configuration_nfs=true
+        shift
+      ;;
+
+      -c=*|--cygwin-dir=*)
+        prop_cygwin_dir="${i#*=}"
       ;;
 
       *)
         echoError "Unknown argument '$i' given"
-        echo #EMPTY
+        printf "\n"
         usage
       ;;
     esac
   done
 
   if [ ${#prop_shared_folders[@]} -eq 0 ]; then
-    prop_shared_folders+=("/Users")
+    prop_shared_folders+=("/Users:/Users")
   fi;
 
   echoInfo "Configuration:"
 
-  echo #EMPTY
-  echo #EMPTY
+  printf "\n"
+  printf "\n"
 
   echoProperties "Machine Name: $prop_machine_name"
   for shared_folder in "${prop_shared_folders[@]}"
@@ -195,9 +221,11 @@ parseCli()
 
   echoProperties "Mount Options: $prop_mount_options"
   echoProperties "Force: $prop_force_configuration_nfs"
+  case $(uname) in
+    CYGWIN*) echoProperties "Cygwin root: $prop_cygwin_dir" ;;
+  esac
 
-  echo #EMPTY
-
+  printf "\n"
 }
 
 # @info:    Checks if the machine is present
@@ -205,9 +233,9 @@ parseCli()
 # @return:  (none)
 checkMachinePresence ()
 {
-  echoInfo "machine presence ... \t\t\t"
+  echoInfo "Machine presence ... \t\t\t"
 
-  if [ "" = "$(docker-machine ls | sed 1d | grep -w "$1")" ]; then
+  if [ -z "$(docker-machine ls | sed 1d | grep -w "$1")" ]; then
     echoError "Could not find the machine '$1'!"; exit 1;
   fi
 
@@ -219,7 +247,7 @@ checkMachinePresence ()
 # @return:  (none)
 checkMachineRunning ()
 {
-  echoInfo "machine running ... \t\t\t"
+  echoInfo "Machine running ... \t\t\t"
 
   machine_state=$(docker-machine ls | sed 1d | grep "^$1\s" | awk '{print $4}')
 
@@ -242,7 +270,7 @@ getMachineDriver ()
 # @info:    Loads mandatory properties from the docker machine
 lookupMandatoryProperties ()
 {
-  echoInfo "Lookup mandatory properties ... "
+  echoInfo "Lookup mandatory properties ... \t\t"
 
   prop_machine_ip=$(docker-machine ip $1)
 
@@ -252,14 +280,14 @@ lookupMandatoryProperties ()
     prop_network_id="Shared"
     prop_nfshost_ip=$(ifconfig -m `route get 8.8.8.8 | awk '{if ($1 ~ /interface:/){print $2}}'` | awk 'sub(/inet /,""){print $1}')
     prop_machine_ip=$prop_nfshost_ip
-    if [ "" = "${prop_nfshost_ip}" ]; then
+    if [ -z "${prop_nfshost_ip}" ]; then
       echoError "Could not find the vmware fusion net IP!"; exit 1
     fi
     local nfsd_line="nfs.server.mount.require_resv_port = 0"
     echoSuccess "\t\tOK"
 
     echoInfo "Check NFS config settings ... \n"
-    if [ "$(grep -Fxq "$nfsd_line" /etc/nfs.conf)" == "0" ]; then
+    if [ "$(grep -Fxq "$nfsd_line" /etc/nfs.conf)" = "0" ]; then
       echoInfo "/etc/nfs.conf is setup correctly!"
     else
       echoWarn "\n !!! Sudo will be necessary for editing /etc/nfs.conf !!!"
@@ -277,7 +305,7 @@ lookupMandatoryProperties ()
   if [ "$prop_machine_driver" = "xhyve" ]; then
     prop_network_id="Shared"
     prop_nfshost_ip=$(ifconfig -m `route get $prop_machine_ip | awk '{if ($1 ~ /interface:/){print $2}}'` | awk 'sub(/inet /,""){print $1}')
-    if [ "" = "${prop_nfshost_ip}" ]; then
+    if [ -z "${prop_nfshost_ip}" ]; then
       echoError "Could not find the xhyve net IP!"; exit 1
     fi
     echoSuccess "OK"
@@ -289,7 +317,7 @@ lookupMandatoryProperties ()
     prop_nfshost_ip=$(prlsrvctl net info \
       "${prop_network_id}" | grep 'IPv4 address' | sed 's/.*: //')
 
-    if [ "" = "${prop_nfshost_ip}" ]; then
+    if [ -z "${prop_nfshost_ip}" ]; then
       echoError "Could not find the parallels net IP!"; exit 1
     fi
 
@@ -303,14 +331,14 @@ lookupMandatoryProperties ()
 
   prop_network_id=$(VBoxManage showvminfo $1 --machinereadable |
     grep hostonlyadapter | cut -d'"' -f2)
-  if [ "" = "${prop_network_id}" ]; then
+  if [ -z "${prop_network_id}" ]; then
     echoError "Could not find the virtualbox net name!"; exit 1
   fi
 
   prop_nfshost_ip=$(VBoxManage list hostonlyifs |
     grep "${prop_network_id}" -A 3 | grep IPAddress |
     cut -d ':' -f2 | xargs);
-  if [ "" = "${prop_nfshost_ip}" ]; then
+  if [ -z "${prop_nfshost_ip}" ]; then
     echoError "Could not find the virtualbox net IP!"; exit 1
   fi
 
@@ -321,26 +349,69 @@ lookupMandatoryProperties ()
 configureNFS()
 {
   echoInfo "Configure NFS ... \n"
-
   if isPropertyNotSet $prop_machine_ip; then
     echoError "'prop_machine_ip' not set!"; exit 1;
   fi
 
-  echoWarn "\n !!! Sudo will be necessary for editing /etc/exports !!!"
+  case $(uname) in
+    CYGWIN*)
+      local server_map_file=${prop_cygwin_dir}/etc/nfs/server.map
 
+      awk '!a[$0]++' $server_map_file | tee $server_map_file > /dev/null
+      local checksum=$(cksum $server_map_file)
+
+      echoInfo "  Updating /etc/nfs/server.map ... \t"
+      (
+        printf "\nuid\t1000\t%s\t# user id for %s\n" $(id -u) "$USER" | tee -a $server_map_file &&
+        printf "\ngid\t50\t%s\t# group id for %s\n" $(id -g) "$USER" | tee -a $server_map_file &&
+        awk '!a[$0]++' $server_map_file | tee $server_map_file
+      ) > /dev/null
+
+      if [ "$(cksum $server_map_file)" = "$checksum" ]; then
+        echoSuccess "No changes"
+      else
+        echoSuccess "OK"
+      fi
+
+      local exports_file=${prop_cygwin_dir}/etc/exports
+      ;;
+    *)
+      echoWarn "\n !!! Sudo will be necessary for editing /etc/exports !!!"
+      local exports_file=/etc/exports
+      ;;
+  esac
+
+  local checksum=$(cksum $exports_file)
+
+  echoInfo "  Updating /etc/exports ... \t\t"
   for shared_folder in "${prop_shared_folders[@]}"
   do
-    # Update the /etc/exports file and restart nfsd
+    local host_folder=${shared_folder%:*}
+    # Update the /etc/exports file
     (
-      echo '\n'$shared_folder' '$prop_machine_ip' '$prop_nfs_config'\n' |
-        sudo tee -a /etc/exports && awk '!a[$0]++' /etc/exports |
-        sudo tee /etc/exports
+      printf "\n%s %s %s\n" "$host_folder" "$prop_machine_ip" "$prop_nfs_config" |
+        sudo tee -a $exports_file &&
+        awk '!a[$0]++' $exports_file | sudo tee $exports_file
     ) > /dev/null
   done
 
-  sudo nfsd restart ; sleep 2 && sudo nfsd checkexports
+  case $(uname) in
+    CYGWIN*)
+      if [ "$(cksum $exports_file)" = "$checksum" ]; then
+        echoSuccess "No changes"
+      else
+        # It seems a system restart is necessary :(
+        echoSuccess "System restart required for nfsd changes to take effect"
+        exit 1
+      fi
+      ;;
+    *)
+      # Restart nfsd
+      sudo nfsd restart ; sleep 2 && sudo nfsd checkexports
+      echoSuccess "OK"
+      ;;
+  esac
 
-  echoSuccess "\t\t\t\t\t\tOK"
 }
 
 # @info:    Configures the VirtualBox Docker Machine to mount nfs
@@ -361,10 +432,13 @@ configureBoot2Docker()
   local bootlocalsh='#!/bin/sh
   sudo umount /Users'
 
+  local host_folder mount_folder
+
   for shared_folder in "${prop_shared_folders[@]}"
   do
+    mount_folder=${shared_folder#*:}
     bootlocalsh="${bootlocalsh}
-    sudo mkdir -p "$shared_folder
+    sudo mkdir -p "$mount_folder
   done
 
   bootlocalsh="${bootlocalsh}
@@ -372,8 +446,10 @@ configureBoot2Docker()
 
   for shared_folder in "${prop_shared_folders[@]}"
   do
+    host_folder=${shared_folder%:*}
+    mount_folder=${shared_folder#*:}
     bootlocalsh="${bootlocalsh}
-    sudo mount -t nfs -o "$prop_mount_options" "$prop_nfshost_ip":"$shared_folder" "$shared_folder
+    sudo mount -t nfs -o "$prop_mount_options" "$prop_nfshost_ip":"$host_folder" "$mount_folder
   done
 
   local file="/var/lib/boot2docker/bootlocal.sh"
@@ -405,9 +481,10 @@ isNFSMounted()
 {
   for shared_folder in "${prop_shared_folders[@]}"
   do
+    local host_folder=${shared_folder%:*}
     local nfs_mount=$(docker-machine ssh $prop_machine_name "sudo df" |
-      grep "$prop_nfshost_ip:$prop_shared_folders")
-    if [ "" = "$nfs_mount" ]; then
+      grep "$prop_nfshost_ip:$host_folder")
+    if [ -z "$nfs_mount" ]; then
       echo "false";
       return;
     fi
@@ -439,16 +516,16 @@ verifyNFSMount()
 # @info:    Displays the finish message
 showFinish()
 {
-  echo "\033[0;36m"
-  echo "--------------------------------------------"
-  echo
-  echo " The docker-machine '$prop_machine_name'"
-  echo " is now mounted with NFS!"
-  echo
-  echo " ENJOY high speed mounts :D"
-  echo
-  echo "--------------------------------------------"
-  echo "\033[0m"
+  printf "\n\033[0;36m"
+  printf "%s\n" "--------------------------------------------"
+  printf "%s\n" ""
+  printf "%s\n" " The docker-machine '$prop_machine_name'"
+  printf "%s\n" " is now mounted with NFS!"
+  printf "%s\n" ""
+  printf "%s\n" " ENJOY high speed mounts :D\n"
+  printf "%s\n" ""
+  printf "%s\n" "--------------------------------------------"
+  printf "\033[0m"
 }
 
 # END _functions
@@ -463,16 +540,16 @@ checkMachineRunning $prop_machine_name
 lookupMandatoryProperties $prop_machine_name
 
 if [ "$(isNFSMounted)" = "true" ] && [ "$prop_force_configuration_nfs" = false ]; then
-    echoSuccess "\n NFS already mounted." ; showFinish ; exit 0
+    echoInfo "NFS already mounted" ; showFinish ; exit 0
 fi
 
-echo #EMPTY LINE
+printf "\n"
 
 echoProperties "Machine IP: $prop_machine_ip"
 echoProperties "Network ID: $prop_network_id"
 echoProperties "NFSHost IP: $prop_nfshost_ip"
 
-echo #EMPTY LINE
+printf "\n"
 
 configureNFS
 
