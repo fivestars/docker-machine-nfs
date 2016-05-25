@@ -58,7 +58,6 @@ Options:
   -n, --nfs-config          NFS configuration to use in /etc/exports (default to '-alldirs -mapall=\$(id -u):\$(id -g)')
   -s, --shared-folder,...   Folder to share. Use local:mount form to specify a different name for the docker machine mount (default to /Users)
   -m, --mount-opts          NFS mount options (default to 'noacl,async[,nolock on Cygwin]')
-  -c, --cygwin-dir          Location of x86 Cygwin root directory [Cygwin only] (default to /cygdrive/c/cygwin)
 
 Examples:
 
@@ -152,7 +151,6 @@ setPropDefaults()
     *) prop_mount_options="noacl,async";;
   esac
   prop_force_configuration_nfs=false
-  prop_cygwin_dir="/cygdrive/c/cygwin"
 }
 
 # @info:    Parses and validates the CLI arguments
@@ -192,10 +190,6 @@ parseCli()
         shift
       ;;
 
-      -c=*|--cygwin-dir=*)
-        prop_cygwin_dir="${i#*=}"
-      ;;
-
       *)
         echoError "Unknown argument '$i' given"
         printf "\n"
@@ -221,9 +215,6 @@ parseCli()
 
   echoProperties "Mount Options: $prop_mount_options"
   echoProperties "Force: $prop_force_configuration_nfs"
-  case $(uname) in
-    CYGWIN*) echoProperties "Cygwin root: $prop_cygwin_dir" ;;
-  esac
 
   printf "\n"
 }
@@ -355,7 +346,7 @@ configureNFS()
 
   case $(uname) in
     CYGWIN*)
-      local server_map_file=${prop_cygwin_dir}/etc/nfs/server.map
+      local server_map_file=/etc/nfs/server.map
 
       awk '!a[$0]++' $server_map_file | tee $server_map_file > /dev/null
       local checksum=$(cksum $server_map_file)
@@ -373,7 +364,7 @@ configureNFS()
         echoSuccess "OK"
       fi
 
-      local exports_file=${prop_cygwin_dir}/etc/exports
+      local exports_file=/etc/exports
       ;;
     *)
       echoWarn "\n !!! Sudo will be necessary for editing /etc/exports !!!"
@@ -402,7 +393,6 @@ configureNFS()
       else
         # It seems a system restart is necessary :(
         echoSuccess "System restart required for nfsd changes to take effect"
-        exit 1
       fi
       ;;
     *)
@@ -522,7 +512,7 @@ showFinish()
   printf "%s\n" " The docker-machine '$prop_machine_name'"
   printf "%s\n" " is now mounted with NFS!"
   printf "%s\n" ""
-  printf "%s\n" " ENJOY high speed mounts :D\n"
+  printf "%s\n" " ENJOY high speed mounts :D"
   printf "%s\n" ""
   printf "%s\n" "--------------------------------------------"
   printf "\033[0m"
