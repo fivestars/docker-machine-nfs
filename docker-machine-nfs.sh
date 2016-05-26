@@ -529,19 +529,17 @@ checkMachineRunning $prop_machine_name
 
 lookupMandatoryProperties $prop_machine_name
 
-if [ "$(isNFSMounted)" = "true" ] && [ "$prop_force_configuration_nfs" = false ]; then
-    echoInfo "NFS already mounted" ; showFinish ; exit 0
-fi
+configureNFS
 
 printf "\n"
-
 echoProperties "Machine IP: $prop_machine_ip"
 echoProperties "Network ID: $prop_network_id"
 echoProperties "NFSHost IP: $prop_nfshost_ip"
-
 printf "\n"
 
-configureNFS
+if [ "$(isNFSMounted)" = "true" ] && [ "$prop_force_configuration_nfs" = false ]; then
+    echoInfo "NFS already mounted" ; showFinish ; exit 0
+fi
 
 configureBoot2Docker
 restartDockerMachine
