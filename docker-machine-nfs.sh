@@ -58,6 +58,7 @@ Options:
   -n, --nfs-config          NFS configuration to use in /etc/exports (default to '-alldirs -mapall=\$(id -u):\$(id -g)')
   -s, --shared-folder,...   Folder to share. Use local:mount form to specify a different name for the docker machine mount (default to /Users)
   -m, --mount-opts          NFS mount options (default to 'noacl,async[,nolock on Cygwin]')
+  -u, --user-map            [Cygwin only] <user id>:<group id> to map the host's user to in the docker machine (default to 0:0, ie. root)
 
 Examples:
 
@@ -133,6 +134,17 @@ case $(uname) in
     {
       $@;
     }
+
+    cygsudo()
+    {
+      if [ $# -eq 0 ]; then
+        echo "Usage: sudo program arg1 arg2 ..."
+        return 1
+      fi
+      prog="$1"
+      shift
+      cygstart --hide --action=runas $(which "$prog") "$@"
+    }
     ;;
   *) ;;
 esac
@@ -151,6 +163,7 @@ setPropDefaults()
     *) prop_mount_options="noacl,async";;
   esac
   prop_force_configuration_nfs=false
+  prop_user_map=0:0
 }
 
 # @info:    Parses and validates the CLI arguments
@@ -188,6 +201,10 @@ parseCli()
       -f|--force)
         prop_force_configuration_nfs=true
         shift
+      ;;
+
+      -u|--user-map)
+        prop_user_map="${i#*=}"
       ;;
 
       *)
@@ -269,7 +286,9 @@ lookupMandatoryProperties ()
 
   if [ "$prop_machine_driver" = "vmwarefusion" ]; then
     prop_network_id="Shared"
-    prop_nfshost_ip=$(ifconfig -m `route get 8.8.8.8 | awk '{if ($1 ~ /interface:/){print $2}}'` | awk 'sub(/inet /,""){print $1}')
+    prop_nfshost_ip=$(ifconfig -m `route get 8.8.8.8 |
+      awk '{if ($1 ~ /interface:/){print $2}}'` |
+      awk 'sub(/inet /,""){print $1}')
     prop_machine_ip=$prop_nfshost_ip
     if [ -z "${prop_nfshost_ip}" ]; then
       echoError "Could not find the vmware fusion net IP!"; exit 1
@@ -281,13 +300,13 @@ lookupMandatoryProperties ()
     if [ "$(grep -Fxq "$nfsd_line" /etc/nfs.conf)" = "0" ]; then
       echoInfo "/etc/nfs.conf is setup correctly!"
     else
-      echoWarn "\n !!! Sudo will be necessary for editing /etc/nfs.conf !!!"
+      echoWarn "!!! Sudo will be necessary for editing /etc/nfs.conf !!!"
       # Backup /etc/nfs.conf file
-      sudo cp /etc/nfs.conf /etc/nfs.conf.bak && \
-      echo "nfs.server.mount.require_resv_port = 0" | \
-        sudo tee /etc/nfs.conf > /dev/null
-      echoWarn "\n !!! Backed up /etc/nfs.conf to /nfs.conf.bak !!!"
-      echoWarn "\n !!! Added 'nfs.server.mount.require_resv_port = 0' to /etc/nfs.conf !!!"
+      sudo cp /etc/nfs.conf /etc/nfs.conf.bak &&
+        echo "nfs.server.mount.require_resv_port = 0" |
+          sudo tee /etc/nfs.conf > /dev/null
+      echoWarn "!!! Backed up /etc/nfs.conf to /nfs.conf.bak !!!"
+      echoWarn "!!! Added 'nfs.server.mount.require_resv_port = 0' to /etc/nfs.conf !!!"
     fi
     echoSuccess "\n\t\t\t\t\t\tOK"
     return
@@ -295,7 +314,9 @@ lookupMandatoryProperties ()
 
   if [ "$prop_machine_driver" = "xhyve" ]; then
     prop_network_id="Shared"
-    prop_nfshost_ip=$(ifconfig -m `route get $prop_machine_ip | awk '{if ($1 ~ /interface:/){print $2}}'` | awk 'sub(/inet /,""){print $1}')
+    prop_nfshost_ip=$(ifconfig -m `route get $prop_machine_ip |
+      awk '{if ($1 ~ /interface:/){print $2}}'` |
+      awk 'sub(/inet /,""){print $1}')
     if [ -z "${prop_nfshost_ip}" ]; then
       echoError "Could not find the xhyve net IP!"; exit 1
     fi
@@ -305,7 +326,7 @@ lookupMandatoryProperties ()
 
   if [ "$prop_machine_driver" = "parallels" ]; then
     prop_network_id="Shared"
-    prop_nfshost_ip=$(prlsrvctl net info \
+    prop_nfshost_ip=$(prlsrvctl net info
       "${prop_network_id}" | grep 'IPv4 address' | sed 's/.*: //')
 
     if [ -z "${prop_nfshost_ip}" ]; then
@@ -347,15 +368,18 @@ configureNFS()
   case $(uname) in
     CYGWIN*)
       local server_map_file=/etc/nfs/server.map
-
+      touch $server_map_file
       awk '!a[$0]++' $server_map_file | tee $server_map_file > /dev/null
       local checksum=$(cksum $server_map_file)
 
       echoInfo "  Updating /etc/nfs/server.map ... \t"
       (
-        printf "\nuid\t1000\t%s\t# user id for %s\n" $(id -u) "$USER" | tee -a $server_map_file &&
-        printf "\ngid\t50\t%s\t# group id for %s\n" $(id -g) "$USER" | tee -a $server_map_file &&
-        awk '!a[$0]++' $server_map_file | tee $server_map_file
+        printf "\nuid\t${prop_user_map%:*}\t%s\t# user id for %s\n" $(id -u) "$USER" |
+          tee -a $server_map_file
+        printf "\ngid\t${prop_user_map#*:}\t%s\t# group id for %s\n" $(id -g) "$USER" |
+          tee -a $server_map_file
+        awk '!a[$0]++' $server_map_file |
+          tee $server_map_file
       ) > /dev/null
 
       if [ "$(cksum $server_map_file)" = "$checksum" ]; then
@@ -367,7 +391,7 @@ configureNFS()
       local exports_file=/etc/exports
       ;;
     *)
-      echoWarn "\n !!! Sudo will be necessary for editing /etc/exports !!!"
+      echoWarn "!!! Sudo will be necessary for editing /etc/exports !!!"
       local exports_file=/etc/exports
       ;;
   esac
@@ -380,7 +404,7 @@ configureNFS()
     local host_folder=${shared_folder%:*}
     # Update the /etc/exports file
     (
-      printf "\n%s %s %s\n" "$host_folder" "$prop_machine_ip" "$prop_nfs_config" |
+      printf "\n%s %s%s\n" "$host_folder" "$prop_machine_ip" "$prop_nfs_config" |
         sudo tee -a $exports_file &&
         awk '!a[$0]++' $exports_file | sudo tee $exports_file
     ) > /dev/null
@@ -391,8 +415,20 @@ configureNFS()
       if [ "$(cksum $exports_file)" = "$checksum" ]; then
         echoSuccess "No changes"
       else
-        # It seems a system restart is necessary :(
-        echoSuccess "System restart required for nfsd changes to take effect"
+        if net start | grep -qw rpcbind; then
+            cygsudo net stop /y rpcbind
+            while net start | grep -qw rpcbind; do :; done
+        fi
+
+        if ! net start | grep -qw mountd; then
+            cygsudo net start mountd
+            while ! net start | grep -qw mountd; do :; done
+        fi
+
+        if ! net start | grep -qw nfsd; then
+            cygsudo net start nfsd
+            while ! net start | grep -qw nfsd; do :; done
+        fi
       fi
       ;;
     *)
@@ -401,7 +437,6 @@ configureNFS()
       echoSuccess "OK"
       ;;
   esac
-
 }
 
 # @info:    Configures the VirtualBox Docker Machine to mount nfs
