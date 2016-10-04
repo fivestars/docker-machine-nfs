@@ -405,9 +405,14 @@ configureNFS()
   for shared_folder in "${prop_shared_folders[@]}"
   do
     local host_folder=${shared_folder%:*}
+    local line_format
+    case $(uname) in
+      CYGWIN*) line_format="\\n%s %s%s\\n";;  # Shouldn't have a space between host and config
+      *) line_format="\\n%s %s %s\\n";;
+    esac
     # Update the /etc/exports file
     (
-      printf "\n%s %s%s\n" "$host_folder" "$prop_machine_ip" "$prop_nfs_config" |
+      printf "$line_format" "$host_folder" "$prop_machine_ip" "$prop_nfs_config" |
         sudo tee -a $exports_file &&
         awk '!a[$0]++' $exports_file | sudo tee $exports_file
     ) > /dev/null
