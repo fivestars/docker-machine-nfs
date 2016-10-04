@@ -216,8 +216,11 @@ parseCli()
   done
 
   if [ ${#prop_shared_folders[@]} -eq 0 ]; then
-    prop_shared_folders+=("/Users:/Users")
-  fi;
+    case $(uname) in
+      CYGWIN*) prop_shared_folders+=("/home:/home");;
+      *) prop_shared_folders+=("/Users:/Users");;
+    esac
+  fi
 
   echoInfo "Configuration:"
 
