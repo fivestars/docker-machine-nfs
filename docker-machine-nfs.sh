@@ -352,7 +352,7 @@ lookupMandatoryProperties ()
 
   prop_nfshost_ip=$(VBoxManage list hostonlyifs |
     grep "${prop_network_id}" -A 3 | grep IPAddress |
-    cut -d ':' -f2 | xargs);
+    cut -d ':' -f2 | xargs | tr -dc '[[:print:]]');
   if [ -z "${prop_nfshost_ip}" ]; then
     echoError "Could not find the virtualbox net IP!"; exit 1
   fi
@@ -482,7 +482,7 @@ configureBoot2Docker()
     host_folder=${shared_folder%:*}
     mount_folder=${shared_folder#*:}
     bootlocalsh="${bootlocalsh}
-    sudo mount -t nfs -o "$prop_mount_options" "$prop_nfshost_ip":"$host_folder" "$mount_folder
+    sudo mount -t nfs -o $prop_mount_options $prop_nfshost_ip:$host_folder $mount_folder"
   done
 
   local file="/var/lib/boot2docker/bootlocal.sh"
